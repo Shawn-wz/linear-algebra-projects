@@ -1,0 +1,6 @@
+# expect: There are infinitely many solutions. Solution: ( 0 3 0 )T + x3 ( 1 -2 1 )T
+3 3
+0.0009765625 0.001953125 0.0029296875 0.005859375
+0.001953125 0.00390625 0.005859375 0.01171875
+0.0009765625 0.0009765625 0.0009765625 0.0029296875
+# rows are scaled by 2^-10 and row 2 is twice row 1, so the rank is 2

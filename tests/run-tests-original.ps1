@@ -1,10 +1,10 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Extended test harness for the linear equation solvers.
+    Test harness for linear-equations-solver.cpp.
 
 .DESCRIPTION
-    Runs every case file through the solver and checks four independent things.
+    Runs every case file through the solver and checks three independent things.
 
     1. Expected classification.  Computed here by an exact integer oracle
        (fraction-free Bareiss elimination over System.Numerics.BigInteger), so
@@ -24,28 +24,13 @@
                    printed set really is the whole solution set.
          none      nothing further to check.
 
-    4. Expected output, for a case that carries a
-           # expect: <the complete output, on one line>
-       line above its data.  Every printed number is then compared with the
-       number written in the file, so a case pins down not only the solution
-       set but also the particular numbers printed for it.  Cases without such
-       a line skip this check.  This is what makes a case that only differs
-       from another by a scaling factor able to prove that the answer did not
-       change.
-
     Residuals are reported relative to the data magnitude, which makes the
     achieved numerical precision visible.
-
-    Finally the handling of bad input is verified, by feeding the solver
-    truncated, non numeric, non positive and oversized descriptions of a
-    system, and checking that it answers with its documented refusal instead
-    of crashing.
 
     Case file format
         line 1      <rows> <cols>
         following   <rows> lines of <cols> coefficients then the constant
         '#'         starts a comment line, blank lines are ignored
-        '# expect:' a comment line carrying the expected output
 
 .PARAMETER Filter
     Filesystem wildcard (not a regular expression) selecting the case files,
@@ -57,11 +42,8 @@
     change either; it is a cheap probe for tolerance/scale problems.  Off by
     default because an absolute eps is not scale invariant.
 
-.PARAMETER SkipRobustness
-    Skip the check of how the solver handles malformed input.
-
 .EXAMPLE
-    pwsh -NoProfile -File tests/run-tests.ps1 -Source linear-equations-solver-robust.cpp
+    pwsh -NoProfile -File tests/run-tests.ps1
 
 .EXAMPLE
     pwsh -NoProfile -File tests/run-tests.ps1 -ScaleCheck -Filter '1*'
@@ -73,8 +55,6 @@ param(
     [string]   $CaseDir  = 'tests',
     [string]   $Filter   = '*.txt',
     [double]   $Tol      = 1e-6,
-    [double]   $ExpectedTol = 1e-9,
-    [switch]   $SkipRobustness,
     [switch]   $ScaleCheck,
     [double[]] $Scales   = @(1e-6, 1e6)
 )
@@ -89,23 +69,12 @@ function Resolve-UnderRoot([string]$path) {
     return Join-Path $Root $path
 }
 
-function Confirm-Number([string]$text) {
-    $v = 0.0
-    return [double]::TryParse($text, [Globalization.NumberStyles]::Float, $Inv, [ref]$v)
-}
-
 # ---------------------------------------------------------------- case files
 
 function Read-CaseFile([string]$path) {
-    $raw   = @(Get-Content -LiteralPath $path)
-    $lines = @($raw | Where-Object { $_.Trim() -ne '' -and -not $_.TrimStart().StartsWith('#') })
+    $lines = @(Get-Content -LiteralPath $path |
+               Where-Object { $_.Trim() -ne '' -and -not $_.TrimStart().StartsWith('#') })
     if ($lines.Count -lt 1) { throw "empty case file: $path" }
-
-    # an expected output written as '# expect: ...' just above the data
-    $expect = $null
-    foreach ($line in $raw) {
-        if ($line.TrimStart().StartsWith('# expect:')) { $expect = $line.Substring($line.IndexOf(':') + 1).Trim() }
-    }
 
     $head  = $lines[0].Trim() -split '\s+'
     $nRows = [int]$head[0]
@@ -133,7 +102,7 @@ function Read-CaseFile([string]$path) {
         $vecB += $vals[$nCols]
     }
     return @{ Name = [IO.Path]::GetFileName($path); Rows = $nRows; Cols = $nCols
-              A = $matA; B = $vecB; Scale = $scale; Expect = $expect }
+              A = $matA; B = $vecB; Scale = $scale }
 }
 
 # ------------------------------------------------------------- exact oracle
@@ -229,51 +198,9 @@ function Get-SolutionGroups([string]$text) {
     return ,$groups
 }
 
-# The solver reads plain numbers only, while a case file may carry comment
-# lines, so the harness strips exactly what Read-CaseFile ignores.
-function Get-DataLines([string]$path) {
-    return @(Get-Content -LiteralPath $path |
-             Where-Object { $_.Trim() -ne '' -and -not $_.TrimStart().StartsWith('#') })
-}
-
 function Invoke-Solver([string]$exe, [string[]]$lines) {
     $text = (@($lines) -join "`n") + "`n"
     return ($text | & $exe 2>&1 | Out-String)
-}
-
-# ------------------------------------------------------------------- tokens
-
-# Every number printed by the solver, in order, whatever surrounds it. The
-# minus sign is looked up separately, so that it cannot be confused with the
-# minus of an exponent.
-function Get-PrintedNumbers([string]$text) {
-    $values = @()
-    foreach ($m in [regex]::Matches($text, '(?<![\w.])(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?')) {
-        $v = 0.0
-        if ([double]::TryParse($m.Value, [Globalization.NumberStyles]::Float, $Inv, [ref]$v)) {
-            if ($m.Index -gt 0 -and $text[$m.Index - 1] -eq '-') { $v = -$v }
-            $values += $v
-        }
-    }
-    return ,$values
-}
-
-function Compare-Expected([string]$got, [string]$expect) {
-    $faults = @()
-    $want = Get-PrintedNumbers $expect
-    $seen = Get-PrintedNumbers $got
-    if ($seen.Count -ne $want.Count) {
-        $faults += "printed $($seen.Count) number(s), the case expects $($want.Count)"
-        return $faults
-    }
-    for ($i = 0; $i -lt $want.Count; $i++) {
-        $allowed = $ExpectedTol * [Math]::Max(1.0, [Math]::Abs($want[$i]))
-        if ([Math]::Abs($seen[$i] - $want[$i]) -gt $allowed) {
-            $faults += "number $($i + 1) is $($seen[$i]) but the case expects $($want[$i])"
-            break
-        }
-    }
-    return $faults
 }
 
 # --------------------------------------------------------------- arithmetic
@@ -334,7 +261,7 @@ $results = @()
 foreach ($file in $cases) {
     $case   = Read-CaseFile $file.FullName
     $expect = Get-ExactClass $case
-    $text   = Invoke-Solver $exePath (Get-DataLines $file.FullName)
+    $text   = Invoke-Solver $exePath (Get-Content -LiteralPath $file.FullName)
     $got    = Get-Verdict $text
     $groups = Get-SolutionGroups $text
 
@@ -386,58 +313,15 @@ foreach ($file in $cases) {
         }
     }
 
-    # the expected output, for the cases that carry one
-    $checkedOutput = $false
-    if ($case.Expect) {
-        $checkedOutput = $true
-        $faults += Compare-Expected $text $case.Expect
-    }
-
     $results += [pscustomobject]@{
-        Name    = $case.Name
-        Expect  = $expect.Type
-        Rank    = $expect.Rank
-        Got     = $got
-        RelRes  = $relRes
-        Checked = $checkedOutput
-        Faults  = $faults
-        Output  = ($text.Trim() -replace "`r?`n", ' ~ ')
+        Name   = $case.Name
+        Expect = $expect.Type
+        Rank   = $expect.Rank
+        Got    = $got
+        RelRes = $relRes
+        Faults = $faults
+        Output = ($text.Trim() -replace "`r?`n", ' ~ ')
     }
-}
-
-# ---------------------------------------------------- input robustness
-
-$robustFaults = 0
-$robustChecks = 0
-
-function Test-SolverRobustness([string]$exe, [string]$what, [string[]]$lines, [string]$wantText, [int]$wantExit) {
-    $script:robustChecks++
-    $text = (Invoke-Solver $exe $lines).Trim() -replace "`r?`n", ' ~ '
-    $problems = @()
-    if ($text -ne $wantText) { $problems += "answered '$text', want '$wantText'" }
-    $code = $LASTEXITCODE
-    if ($code -ne $wantExit) { $problems += "exit code $code, want $wantExit" }
-    if ($problems.Count) {
-        $script:robustFaults++
-        Write-Host ("  FAIL  robustness: $what") -ForegroundColor Red
-        foreach ($p in $problems) { Write-Host "          - $p" -ForegroundColor Red }
-    }
-    else {
-        Write-Host ("  PASS  robustness: $what")
-    }
-}
-
-if (-not $SkipRobustness) {
-    Write-Host ""
-    Write-Host "input robustness:"
-    Test-SolverRobustness $exePath 'headers that are not a size'      @('x 3', '1 2 3 4')                 'Invalid input.' 2
-    Test-SolverRobustness $exePath 'a non positive size'            @('0 3', '1 2 3 4')                 'Invalid input.' 2
-    Test-SolverRobustness $exePath 'a negative size'                @('-1 2', '1 2 3')                  'Invalid input.' 2
-    Test-SolverRobustness $exePath 'a size above the array bound'    @('103 2', '1 2 3')                 'Invalid input.' 2
-    Test-SolverRobustness $exePath 'a coefficient that is not a number' @('2 2', '1 2 3', 'oops 5 6')   'Invalid input.' 2
-    Test-SolverRobustness $exePath 'a truncated case'               @('2 2', '1 2 3')                   'Invalid input.' 2
-    Test-SolverRobustness $exePath 'empty input'                    @('')                               'Invalid input.' 2
-    Test-SolverRobustness $exePath 'a well formed case'             @('1 1', '2 4')                     'The solution exists and is unique. ~ Solution: ( 2 )T' 0
 }
 
 # ------------------------------------------------------------------- report
@@ -447,7 +331,7 @@ $fail = @($results | Where-Object { $_.Faults.Count -gt 0 })
 foreach ($r in $results) {
     $status = if ($r.Faults.Count -eq 0) { 'PASS' } else { 'FAIL' }
     $res    = if ($null -ne $r.RelRes) { "rel.resid $($r.RelRes.ToString('E1', $Inv))" } else { '' }
-    Write-Host ("  {0}  {1,-32} {2,-9} rank {3,-3} {4}" -f $status, $r.Name, $r.Expect, $r.Rank, $res)
+    Write-Host ("  {0}  {1,-30} {2,-9} rank {3,-3} {4}" -f $status, $r.Name, $r.Expect, $r.Rank, $res)
     if ($r.Faults.Count) {
         foreach ($f in $r.Faults) { Write-Host "          - $f" -ForegroundColor Red }
         Write-Host "          printed: $($r.Output)" -ForegroundColor DarkGray
@@ -462,12 +346,6 @@ if ($measured.Count) {
         $worst.RelRes.ToString('E1', $Inv), $worst.Name, $Tol.ToString('E0', $Inv))
 }
 
-$withExpected = @($results | Where-Object { $_.Checked })
-if ($withExpected.Count) {
-    Write-Host ("expected output: {0} case(s) compared number by number (tolerance {1})" -f `
-        $withExpected.Count, $ExpectedTol.ToString('E0', $Inv))
-}
-
 # ---------------------------------------------------- optional scale probe
 
 $scaleFaults = 0
@@ -476,7 +354,7 @@ if ($ScaleCheck) {
     Write-Host "scale probe (A,b multiplied by c; the solution must not change):"
     foreach ($file in $cases) {
         $case = Read-CaseFile $file.FullName
-        $base = Get-SolutionGroups (Invoke-Solver $exePath (Get-DataLines $file.FullName))
+        $base = Get-SolutionGroups (Invoke-Solver $exePath (Get-Content -LiteralPath $file.FullName))
         foreach ($c in $Scales) {
             $lines = @("$($case.Rows) $($case.Cols)")
             for ($i = 0; $i -lt $case.Rows; $i++) {
@@ -504,7 +382,7 @@ if ($ScaleCheck) {
             }
             if ($why) {
                 $scaleFaults++
-                Write-Host ("  FAIL  {0,-32} c={1,-7} {2}" -f $case.Name, $c, $why) -ForegroundColor Red
+                Write-Host ("  FAIL  {0,-30} c={1,-7} {2}" -f $case.Name, $c, $why) -ForegroundColor Red
             }
         }
     }
@@ -515,13 +393,10 @@ if ($ScaleCheck) {
 
 Write-Host ""
 Write-Host ("{0} case(s): {1} passed, {2} failed" -f $results.Count, ($results.Count - $fail.Count), $fail.Count)
-if (-not $SkipRobustness) {
-    Write-Host ("robustness: {0} check(s), {1} failed" -f $robustChecks, $robustFaults)
-}
 if ($ScaleCheck) {
     $probeTotal = $cases.Count * $Scales.Count
     Write-Host ("scale probe: {0} of {1} checks changed the solution" -f $scaleFaults, $probeTotal)
 }
 Remove-Item $exePath -ErrorAction SilentlyContinue
-if ($fail.Count -gt 0 -or $scaleFaults -gt 0 -or $robustFaults -gt 0) { exit 1 }
+if ($fail.Count -gt 0 -or $scaleFaults -gt 0) { exit 1 }
 exit 0
